@@ -7,20 +7,33 @@ const app = express();
 // Cloud Run inyecta la variable PORT (por defecto 8080)
 const PORT = Number(process.env.PORT) || 8080;
 
-// CORS: lista de orígenes permitidos separados por coma.
-// Ej: ALLOWED_ORIGINS=https://mi-app.netlify.app,http://localhost:5173
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+// CORS: lista de orígenes permitidos separados por coma (sin barra final).
+const DEFAULT_ORIGINS = [
+  'https://keen-dolphin-c0e2de.netlify.app',
+  'https://6af6467fb504157132b5fab7--keen-dolphin-c0e2de.netlify.app',
+  'http://localhost:5173',
+];
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || DEFAULT_ORIGINS.join(','))
   .split(',')
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
-if (allowedOrigins.length === 0) {
-  console.warn('⚠️  ALLOWED_ORIGINS no está definido: se permiten peticiones desde cualquier origen.');
+function isOriginAllowed(origin) {
+  if (!origin) return true; // peticiones sin Origin (curl, healthchecks)
+  const clean = origin.replace(/\/+$/, '');
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(clean)) return true;
+  // Permite cualquier deploy preview de este sitio en Netlify (https://<hash>--keen-dolphin-c0e2de.netlify.app)
+  if (/^https:\/\/[a-z0-9-]+--keen-dolphin-c0e2de\.netlify\.app$/i.test(clean)) return true;
+  return false;
 }
 
 app.use(
   cors({
-    origin: allowedOrigins.length ? allowedOrigins : true,
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) return callback(null, true);
+      return callback(new Error(`Origen no permitido por CORS: ${origin}`));
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   })
 );
