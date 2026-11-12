@@ -1,0 +1,14 @@
+# Configuración de Netlify (se lee desde la raíz del repositorio)
+[build]
+  base    = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Redirección SPA: cualquier ruta sirve index.html
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
