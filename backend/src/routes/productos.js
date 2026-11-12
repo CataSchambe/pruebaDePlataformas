@@ -1,8 +1,7 @@
 import { Router } from 'express';
-import { supabase } from '../supabase.js';
+import { pool } from '../db.js';
 
 const router = Router();
-const TABLE = 'productos';
 const COLUMNS = 'id, nombre, descripcion, precio, stock, created_at, updated_at';
 
 /**
@@ -18,7 +17,7 @@ function validarProducto(body = {}) {
   if (nombre.trim().length > 120) {
     return { error: 'El "nombre" no puede superar 120 caracteres.' };
   }
-  if (typeof descripcion !== 'string') {
+  if (descripcion !== null && typeof descripcion !== 'string') {
     return { error: 'La "descripcion" debe ser texto.' };
   }
 
@@ -35,7 +34,7 @@ function validarProducto(body = {}) {
   return {
     data: {
       nombre: nombre.trim(),
-      descripcion: descripcion.trim(),
+      descripcion: (descripcion ?? '').trim(),
       precio: Math.round(precioNum * 100) / 100,
       stock: stockNum,
     },
@@ -51,16 +50,22 @@ function parseId(req, res) {
   return id;
 }
 
+async function buscarPorId(id) {
+  const [rows] = await pool.execute(`SELECT ${COLUMNS} FROM productos WHERE id = ?`, [id]);
+  return rows[0] ?? null;
+}
+
 // READ - listar todos (con búsqueda opcional ?q=texto)
 router.get('/', async (req, res) => {
-  let query = supabase.from(TABLE).select(COLUMNS).order('id', { ascending: true });
-
   const q = (req.query.q || '').toString().trim();
-  if (q) query = query.ilike('nombre', `%${q}%`);
 
-  const { data, error } = await query;
-  if (error) throw error;
-  res.json(data);
+  const [rows] = q
+    ? await pool.execute(`SELECT ${COLUMNS} FROM productos WHERE nombre LIKE ? ORDER BY id`, [
+        `%${q}%`,
+      ])
+    : await pool.execute(`SELECT ${COLUMNS} FROM productos ORDER BY id`);
+
+  res.json(rows);
 });
 
 // READ - obtener uno
@@ -68,20 +73,21 @@ router.get('/:id', async (req, res) => {
   const id = parseId(req, res);
   if (id === null) return;
 
-  const { data, error } = await supabase.from(TABLE).select(COLUMNS).eq('id', id).maybeSingle();
-  if (error) throw error;
-  if (!data) return res.status(404).json({ error: 'Producto no encontrado.' });
-  res.json(data);
+  const producto = await buscarPorId(id);
+  if (!producto) return res.status(404).json({ error: 'Producto no encontrado.' });
+  res.json(producto);
 });
 
 // CREATE
 router.post('/', async (req, res) => {
-  const { data: producto, error: validationError } = validarProducto(req.body);
-  if (validationError) return res.status(400).json({ error: validationError });
+  const { data: p, error } = validarProducto(req.body);
+  if (error) return res.status(400).json({ error });
 
-  const { data, error } = await supabase.from(TABLE).insert(producto).select(COLUMNS).single();
-  if (error) throw error;
-  res.status(201).json(data);
+  const [result] = await pool.execute(
+    'INSERT INTO productos (nombre, descripcion, precio, stock) VALUES (?, ?, ?, ?)',
+    [p.nombre, p.descripcion, p.precio, p.stock]
+  );
+  res.status(201).json(await buscarPorId(result.insertId));
 });
 
 // UPDATE
@@ -89,18 +95,18 @@ router.put('/:id', async (req, res) => {
   const id = parseId(req, res);
   if (id === null) return;
 
-  const { data: producto, error: validationError } = validarProducto(req.body);
-  if (validationError) return res.status(400).json({ error: validationError });
+  const { data: p, error } = validarProducto(req.body);
+  if (error) return res.status(400).json({ error });
 
-  const { data, error } = await supabase
-    .from(TABLE)
-    .update(producto)
-    .eq('id', id)
-    .select(COLUMNS)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return res.status(404).json({ error: 'Producto no encontrado.' });
-  res.json(data);
+  if (!(await buscarPorId(id))) {
+    return res.status(404).json({ error: 'Producto no encontrado.' });
+  }
+
+  await pool.execute(
+    'UPDATE productos SET nombre = ?, descripcion = ?, precio = ?, stock = ? WHERE id = ?',
+    [p.nombre, p.descripcion, p.precio, p.stock, id]
+  );
+  res.json(await buscarPorId(id));
 });
 
 // DELETE
@@ -108,9 +114,8 @@ router.delete('/:id', async (req, res) => {
   const id = parseId(req, res);
   if (id === null) return;
 
-  const { data, error } = await supabase.from(TABLE).delete().eq('id', id).select('id');
-  if (error) throw error;
-  if (!data || data.length === 0) return res.status(404).json({ error: 'Producto no encontrado.' });
+  const [result] = await pool.execute('DELETE FROM productos WHERE id = ?', [id]);
+  if (result.affectedRows === 0) return res.status(404).json({ error: 'Producto no encontrado.' });
   res.status(204).end();
 });
 

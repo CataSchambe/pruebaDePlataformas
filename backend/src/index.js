@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import productosRouter from './routes/productos.js';
+import { pool } from './db.js';
 
 const app = express();
 // Cloud Run inyecta la variable PORT (por defecto 8080)
@@ -28,6 +29,15 @@ app.use(express.json({ limit: '100kb' }));
 // Healthcheck
 app.get('/', (_req, res) => res.json({ status: 'ok', service: 'crud-productos-api' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health/db', async (_req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT VERSION() AS version');
+    res.json({ status: 'ok', db: rows[0].version });
+  } catch (err) {
+    console.error('DB healthcheck:', err.message);
+    res.status(503).json({ status: 'error', error: 'No se pudo conectar a la base de datos.' });
+  }
+});
 
 app.use('/api/productos', productosRouter);
 

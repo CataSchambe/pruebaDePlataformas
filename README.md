@@ -2,30 +2,31 @@
 
 Una app CRUD de ejemplo con tres piezas desplegadas por separado:
 
-| Capa      | Tecnología                          | Despliegue                  |
-|-----------|-------------------------------------|-----------------------------|
-| Frontend  | React 19 + Vite + CSS               | **Netlify**                 |
-| Backend   | Node.js + Express 5 (JavaScript)    | **Google Cloud Run (GCP)**  |
-| Base datos| PostgreSQL                          | **Supabase**                |
+| Capa       | Tecnología                        | Despliegue                 |
+|------------|-----------------------------------|----------------------------|
+| Frontend   | React 19 + Vite + CSS             | **Netlify**                |
+| Backend    | Node.js + Express 5 (JavaScript)  | **Google Cloud Run (GCP)** |
+| Base datos | TiDB (compatible con MySQL)       | **TiDB Cloud**             |
 
 ```
-Navegador ──► Netlify (React) ──fetch──► Cloud Run (Express API) ──► Supabase (Postgres)
+Navegador ──► Netlify (React) ──fetch──► Cloud Run (Express API) ──TLS──► TiDB Cloud
 ```
 
-El frontend **nunca** habla con Supabase directamente: todo pasa por la API, que guarda la clave secreta.
+El frontend **nunca** habla con la base de datos directamente: todo pasa por la API, que guarda las credenciales.
 
 ## Estructura
 
 ```
 crud-productos/
-├── database/schema.sql      # Tabla + trigger + RLS + datos de ejemplo
-├── backend/                 # API REST (Cloud Run)
+├── database/schema.sql          # Base de datos + tabla + datos de ejemplo
+├── backend/                     # API REST (Cloud Run)
 │   ├── src/index.js
-│   ├── src/supabase.js
+│   ├── src/db.js                # Pool de conexiones mysql2 (TLS)
 │   ├── src/routes/productos.js
+│   ├── src/scripts/init-db.js   # npm run db:init
 │   ├── Dockerfile
 │   └── .env.example
-├── frontend/                # React (Netlify)
+├── frontend/                    # React (Netlify)
 │   ├── src/App.jsx
 │   ├── src/api.js
 │   ├── src/components/
@@ -35,37 +36,44 @@ crud-productos/
 
 ## Endpoints de la API
 
-| Método | Ruta                   | Descripción                      |
-|--------|------------------------|----------------------------------|
-| GET    | `/health`              | Healthcheck                      |
-| GET    | `/api/productos?q=`    | Listar (búsqueda opcional)       |
-| GET    | `/api/productos/:id`   | Obtener uno                      |
-| POST   | `/api/productos`       | Crear                            |
-| PUT    | `/api/productos/:id`   | Actualizar                       |
-| DELETE | `/api/productos/:id`   | Eliminar                         |
+| Método | Ruta                 | Descripción                         |
+|--------|----------------------|-------------------------------------|
+| GET    | `/health`            | Healthcheck de la API               |
+| GET    | `/health/db`         | Comprueba la conexión con TiDB      |
+| GET    | `/api/productos?q=`  | Listar (búsqueda opcional)          |
+| GET    | `/api/productos/:id` | Obtener uno                         |
+| POST   | `/api/productos`     | Crear                               |
+| PUT    | `/api/productos/:id` | Actualizar                          |
+| DELETE | `/api/productos/:id` | Eliminar                            |
 
 Body JSON: `{ "nombre": "...", "descripcion": "...", "precio": 10.5, "stock": 3 }`
 
 ---
 
-## 1️⃣ Supabase (base de datos)
+## 1️⃣ TiDB Cloud (base de datos)
 
-1. Crea un proyecto en <https://supabase.com/dashboard>.
-2. Ve a **SQL Editor → New query**, pega el contenido de [`database/schema.sql`](database/schema.sql) y pulsa **Run**.
-3. En **Project Settings → API Keys** copia:
-   - **Project URL** → `SUPABASE_URL`
-   - **Secret key** (`sb_secret_...`) o la legacy **service_role** → `SUPABASE_SERVICE_KEY`
+1. En <https://tidbcloud.com> → **Create Resource** → elige **TiDB Cloud Starter** (gratis).
+   Región sugerida: una de AWS en EE. UU. (p. ej. `us-east-1`), cerca de Cloud Run `us-central1`.
+2. Cuando el cluster esté *Available*, pulsa **Connect**:
+   - *Connect With*: **General**
+   - Pulsa **Generate Password** y guárdala (solo se muestra una vez).
+   - Anota **HOST**, **PORT** (4000) y **USERNAME** (tiene un prefijo, p. ej. `2abcXYZ.root`).
+3. Crea la tabla con **una** de estas opciones:
+   - **SQL Editor** de la consola de TiDB: pega [`database/schema.sql`](database/schema.sql) y ejecuta.
+   - **Terminal**: completa `backend/.env` (ver paso 2) y corre `npm run db:init`.
 
-> ⚠️ La clave secreta salta RLS. Solo debe vivir en el backend, nunca en el frontend ni en Git.
+> ℹ️ Cloud Run no tiene IP fija. Si configuras reglas de firewall / IP Access List en TiDB, permite `0.0.0.0/0`
+> (la conexión sigue protegida por TLS + usuario/contraseña).
 
 ## 2️⃣ Probar en local
 
 ```powershell
 # Backend
 cd backend
-copy .env.example .env      # y completa los valores de Supabase
+copy .env.example .env      # completa DB_HOST, DB_USER, DB_PASSWORD
 npm install
-npm run dev                 # http://localhost:8080
+npm run db:init             # crea la base, la tabla y datos de ejemplo
+npm run dev                 # http://localhost:8080  →  /health/db
 
 # Frontend (otra terminal)
 cd frontend
@@ -80,39 +88,41 @@ npm run dev                 # http://localhost:5173
    ```powershell
    gcloud auth login
    gcloud config set project TU_PROJECT_ID
-   gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+   gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
    ```
-2. Despliega desde la carpeta `backend` (Cloud Build usa el `Dockerfile`):
+2. Guarda la contraseña de TiDB en **Secret Manager**:
+   ```powershell
+   Set-Content pass.txt "TU_PASSWORD" -NoNewline
+   gcloud secrets create tidb-password --data-file=pass.txt
+   Remove-Item pass.txt
+
+   # Permite a Cloud Run leer el secreto (cuenta de servicio por defecto de Compute)
+   $PROJECT_NUMBER = gcloud projects describe (gcloud config get-value project) --format="value(projectNumber)"
+   gcloud secrets add-iam-policy-binding tidb-password `
+     --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" `
+     --role="roles/secretmanager.secretAccessor"
+   ```
+3. Despliega desde la carpeta `backend` (Cloud Build usa el `Dockerfile`):
    ```powershell
    cd backend
    gcloud run deploy crud-productos-api `
      --source . `
      --region us-central1 `
      --allow-unauthenticated `
-     --set-env-vars "SUPABASE_URL=https://TU-PROYECTO.supabase.co,SUPABASE_SERVICE_KEY=TU_CLAVE,ALLOWED_ORIGINS=http://localhost:5173"
+     --set-env-vars "DB_HOST=gateway01.us-east-1.prod.aws.tidbcloud.com,DB_PORT=4000,DB_USER=xxxxxxxx.root,DB_NAME=crud_productos" `
+     --set-secrets "DB_PASSWORD=tidb-password:latest"
    ```
-3. Al terminar verás la URL del servicio, p. ej. `https://crud-productos-api-xxxxx-uc.a.run.app`.
-   Pruébala: `https://.../health` → `{"status":"ok"}`.
-
-> 💡 **Recomendado para producción:** guarda la clave en **Secret Manager** en vez de en una variable plana:
-> ```powershell
-> Set-Content key.txt "TU_CLAVE" -NoNewline
-> gcloud secrets create supabase-service-key --data-file=key.txt
-> Remove-Item key.txt
-> gcloud run services update crud-productos-api --region us-central1 `
->   --set-secrets "SUPABASE_SERVICE_KEY=supabase-service-key:latest"
-> ```
-> (La cuenta de servicio de Cloud Run necesita el rol *Secret Manager Secret Accessor*.)
+4. Al terminar verás la URL del servicio, p. ej. `https://crud-productos-api-xxxxx-uc.a.run.app`.
+   Pruébala: `https://.../health/db` → `{"status":"ok","db":"8.0.11-TiDB-..."}`.
 
 ## 4️⃣ Frontend en Netlify
 
 **Opción A — desde GitHub (recomendada):**
-1. Sube este repositorio a GitHub.
-2. En Netlify: **Add new site → Import an existing project** → elige el repo.
+1. En Netlify: **Add new site → Import an existing project** → elige el repo.
    El archivo [`netlify.toml`](netlify.toml) ya define `base = frontend`, el comando de build y la carpeta `dist`.
-3. En **Site configuration → Environment variables** añade:
+2. En **Site configuration → Environment variables** añade:
    `VITE_API_URL = https://crud-productos-api-xxxxx-uc.a.run.app`
-4. **Deploy**. (Si cambias la variable después, vuelve a desplegar: Vite la incrusta en tiempo de build.)
+3. **Deploy**. (Si cambias la variable después, vuelve a desplegar: Vite la incrusta en tiempo de build.)
 
 **Opción B — con la CLI:**
 ```powershell

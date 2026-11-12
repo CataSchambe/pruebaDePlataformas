@@ -1,7 +1,7 @@
 {
   "name": "crud-productos-api",
   "version": "1.0.0",
-  "description": "API REST CRUD de productos (Express + Supabase) para Google Cloud Run",
+  "description": "API REST CRUD de productos (Express + TiDB Cloud) para Google Cloud Run",
   "type": "module",
   "main": "src/index.js",
   "engines": {
@@ -9,11 +9,12 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch --env-file-if-exists=.env src/index.js"
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "db:init": "node --env-file-if-exists=.env src/scripts/init-db.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.119.0",
     "cors": "^2.8.6",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "mysql2": "^3.24.6"
   }
 }

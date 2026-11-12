@@ -80,7 +80,7 @@ export default function App() {
       <header className="header">
         <div>
           <h1>📦 Gestión de Productos</h1>
-          <p className="subtitle">React · Node.js en Cloud Run · Supabase</p>
+          <p className="subtitle">React · Node.js en Cloud Run · TiDB Cloud</p>
         </div>
         <div className="stats">
           <div className="stat">
